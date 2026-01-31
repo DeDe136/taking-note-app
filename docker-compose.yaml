@@ -1,0 +1,15 @@
+version: '3.9'
+
+services:
+  web:
+    build: .
+    container_name: taking-note-app
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_APP=app.py
+      - FLASK_ENV=development
+      - DATABASE_URI=mysql+pymysql://admin:|hr8<CGM*a~|bYjR]>$Rjki6F5p8@my-database.czuooqg8y6dt.ap-southeast-1.rds.amazonaws.com/mysql
+    volumes:
+      - .:/app
+    restart: always
