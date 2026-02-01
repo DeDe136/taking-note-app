@@ -80,7 +80,7 @@ DATABASE_URI = os.environ.get("DATABASE_URI")
 
 def create_app():
     app = Flask(__name__)
-    app.config['SECRET_KEY'] = 'hjshjhdjah kjshkjdhjs'
+    app.config['SECRET_KEY'] = 'taking_note_app_secret_key'
     
     # 3. Tạo chuỗi kết nối MySQL
     app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URI

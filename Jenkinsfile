@@ -3,29 +3,23 @@ pipeline {
     environment {
         // --- Cấu hình chung ---
         AWS_REGION      = "ap-southeast-1" // Định nghĩa Region
-        ECR_REGISTRY    = "954692413669.dkr.ecr.${AWS_REGION}.amazonaws.com"
+        ECR_REGISTRY    = "864304568243.dkr.ecr.${AWS_REGION}.amazonaws.com"
         ECR_REPOSITORY  = "taking-note-app"
         IMAGE_TAG       = "ver-${BUILD_ID}" // Tag image với build ID
         FULL_IMAGE      = "${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}" // URL đầy đủ của image
 
         // --- Cấu hình ECS ---
-        TASK_FAMILY     = "taking-note-app-task-def"
-        CLUSTER_NAME    = "taking-note-app-ecs-cluster"
-        SERVICE_NAME    = "taking-note-app-ecs-service"
-
-        // --- Biến tạm thời (không cần sửa) ---
-        TASK_DEFINITION     = ""
-        NEW_TASK_DEFINITION = ""
-        NEW_TASK_INFO       = ""
-        NEW_REVISION        = ""
+        TASK_FAMILY     = "taking-note-app-fargate"
+        CLUSTER_NAME    = "ecs-cluster"
+        SERVICE_NAME    = "taking-note-app-service"
     }
     stages {
-        // stage('Checkout') {
-        //     steps {
+        stage('Checkout') {
+            steps {
                 
-        //         git 'https://github.com/vantai13/taking-note.git' 
-        //     }
-        // }
+                git branch: 'main', url: 'https://github.com/DeDe136/taking-note-app.git'
+            }
+        }
         stage('Build') {
             steps {
                 // Build image với tag local trước
@@ -44,47 +38,81 @@ pipeline {
             }
         }
 
+        stage('Update ECS via STDIN') {
+            steps {
+                script {
+                    // 1. Lấy task definition hiện tại từ ECS (dạng JSON)
+                    def currentTaskDef = sh(
+                        script: """
+                        aws ecs describe-task-definition \
+                          --task-definition ${TASK_FAMILY} \
+                          --region ${AWS_REGION}
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    // 2. Dùng jq để:
+                    //  - Lấy phần taskDefinition
+                    //  - Thay image container thành image mới
+                    //  - Xóa các field AWS không cho đăng ký lại
+                    def newTaskDef = sh(
+                        script: """
+                        echo '${currentTaskDef}' | jq --arg IMAGE "${FULL_IMAGE}" '
+                          .taskDefinition
+                          | .containerDefinitions[0].image = \$IMAGE
+                          | del(
+                              .taskDefinitionArn,
+                              .revision,
+                              .status,
+                              .requiresAttributes,
+                              .compatibilities,
+                              .registeredAt,
+                              .registeredBy
+                          )
+                        '
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    // 3. Đăng ký task definition mới
+                    def registerOutput = sh(
+                        script: """
+                        aws ecs register-task-definition \
+                          --region ${AWS_REGION} \
+                          --cli-input-json '${newTaskDef}'
+                        """,
+                        returnStdout: true
+                    ).trim()
+                
+                    // 4. Lấy số revision trực tiếp từ output JSON
+                    env.NEW_REVISION = sh(
+                        script: """
+                        echo '${registerOutput}' | jq -r '.taskDefinition.revision'
+                        """,
+                        returnStdout: true
+                    ).trim()
+                
+                    echo "New task definition revision: ${env.NEW_REVISION}"
+                }
+            }
+        }
+
         stage('Update ECS Service') {
             steps {
-                // Sử dụng script block để dễ lấy output từ lệnh sh
-                script {
-                    // 1. Lấy định nghĩa task definition hiện tại (dạng JSON)
-                    TASK_DEFINITION = sh(script: "aws ecs describe-task-definition --task-definition ${TASK_FAMILY} --region ${AWS_REGION}", returnStdout: true).trim()
-
-                    // 2. Tạo định nghĩa task mới bằng cách cập nhật URL image dùng jq
-                    //    Loại bỏ các trường không cần thiết/gây lỗi khi đăng ký lại
-                    NEW_TASK_DEFINITION = sh(script: """
-                        echo '${TASK_DEFINITION}' | jq --arg IMAGE "${FULL_IMAGE}" '
-                        .taskDefinition |
-                        .containerDefinitions[0].image = \$IMAGE |
-                        del(.taskDefinitionArn) |
-                        del(.revision) |
-                        del(.status) |
-                        del(.requiresAttributes) |
-                        del(.compatibilities) |
-                        del(.registeredAt) |
-                        del(.registeredBy)'
-                    """, returnStdout: true).trim()
-
-                    // 3. Đăng ký revision mới của task definition
-                    NEW_TASK_INFO = sh(script: "aws ecs register-task-definition --region ${AWS_REGION} --cli-input-json '${NEW_TASK_DEFINITION}'", returnStdout: true).trim()
-
-                    // 4. Lấy số revision mới từ output JSON
-                    NEW_REVISION = sh(script: "echo '${NEW_TASK_INFO}' | jq -r '.taskDefinition.revision'", returnStdout: true).trim() // -r để lấy chuỗi thuần
-
-                    echo "Successfully registered new task definition revision: ${NEW_REVISION}"
-
-                    // 5. Cập nhật ECS Service để sử dụng revision mới và ép buộc triển khai mới
-                    sh """
-                        set -e # Dừng ngay nếu có lỗi
-                        aws ecs update-service --cluster ${CLUSTER_NAME} \\
-                                               --service ${SERVICE_NAME} \\
-                                               --task-definition ${TASK_FAMILY}:${NEW_REVISION} \\
-                                               --force-new-deployment \\
-                                               --region ${AWS_REGION}
-                        echo "Successfully triggered update for service ${SERVICE_NAME} in cluster ${CLUSTER_NAME}"
-                    """
-                }
+                sh """
+                    # 1. Cập nhật ECS Service
+                    # 2. Service sẽ dùng revision mới nhất của task definition
+                    # 3. --force-new-deployment:
+                    #    - ECS stop task cũ
+                    #    - pull image mới
+                    #    - chạy task mới
+                    aws ecs update-service \
+                        --cluster ${CLUSTER_NAME} \
+                        --service ${SERVICE_NAME} \
+                        --task-definition ${TASK_FAMILY}:${NEW_REVISION} \
+                        --force-new-deployment \
+                        --region ${AWS_REGION}
+                """
             }
         }
     }
