@@ -14,12 +14,12 @@ pipeline {
         SERVICE_NAME    = "taking-note-app-service"
     }
     stages {
-        stage('Checkout') {
-            steps {
+        // stage('Checkout') {
+        //     steps {
                 
-                git branch: 'main', url: 'https://github.com/DeDe136/taking-note-app.git'
-            }
-        }
+        //         git branch: 'main', url: 'https://github.com/DeDe136/taking-note-app.git'
+        //     }
+        // }
         stage('Build') {
             steps {
                 // Build image với tag local trước
@@ -38,7 +38,7 @@ pipeline {
             }
         }
 
-        stage('Update ECS via STDIN') {
+        stage('Register New Task Definition') {
             steps {
                 script {
                     // 1. Lấy task definition hiện tại từ ECS (dạng JSON)
