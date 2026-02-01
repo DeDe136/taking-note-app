@@ -115,5 +115,3 @@ def create_app():
         return dict(server_color=fixed_color)
 
     return app
-
-# 4. Xóa hàm create_database() cũ đi vì nó không còn cần thiết
